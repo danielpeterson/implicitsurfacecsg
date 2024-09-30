@@ -24,20 +24,9 @@ document.body.appendChild(renderer.domElement);
 // Add controls
 const controls = new OrbitControls(camera, renderer.domElement);
 
-// Lighting
-
-const spotLight = new THREE.SpotLight(0xffffff);
-spotLight.distance = 100;
-spotLight.decay = 0;
-scene.add(spotLight);
-
-const ambientLight = new THREE.AmbientLight(0xffffff);
-scene.add(ambientLight);
-
 // Render loop
 function animate() {
     requestAnimationFrame(animate);
-    spotLight.position.copy(camera.position);
     controls.update();
     renderer.render(scene, camera);
 }
@@ -57,15 +46,15 @@ function onWindowResize() {
 // Visualization
 //-----------------------------------------------------------------------------
 
-function addPointsToScene(modelPoints, color, transparent = false) {
+function addPointsToScene(modelPoints, color) {
     if (modelPoints.length == 0) {
         return
     }
 
     const geometry = new THREE.BufferGeometry().setFromPoints(modelPoints);
-    const material = new THREE.PointsMaterial({ color: color, size: 0.4, opacity: 0.1, transparent: transparent });
+    const material = new THREE.PointsMaterial({ color: color, size: 0.4});
     const points = new THREE.Points(geometry, material);
-    scene.add(points);
+    return points;
 }
 
 
@@ -355,13 +344,14 @@ const model = {
     }
 };
 
-// Surfaces
-allSurfaces.forEach((surface) => {
+// CSG surfaces
+const csgSurfacePoints = allSurfaces.map((surface) => {
     const points = generateSurfacePoints(surface, CSG_SURFACE_DENSITY).filter((point) => isPointInsideNode(point, surface, model) == ON_SURFACE);
-    addPointsToScene(points, surface.color);
+    return addPointsToScene(points, surface.color);
 });
 
-// Edges
+// CSG edges
+const csgEdgePoints = [];
 allSurfaces.forEach((surface) => {
     for (const other of allSurfaces) {
         if (surface == other) {
@@ -369,12 +359,32 @@ allSurfaces.forEach((surface) => {
         }
 
         const points = generateSurfaceEdges(surface, other).filter((point) => isPointInsideNode(point, surface, model) == ON_SURFACE);
-        addPointsToScene(points, 0x000000);
+        csgEdgePoints.push(addPointsToScene(points, 0x000000));
     }
 });
 
-// Primitives
-// allSurfaces.forEach((surface) => {
-//     const points = generateSurfacePoints(surface, PRIMITIVE_SURFACE_DENSITY);
-//     addPointsToScene(points, surface.color, true);
-// });
+// Original surfaces
+const originalSurfacePoints = allSurfaces.map((surface) => {
+    const points = generateSurfacePoints(surface, PRIMITIVE_SURFACE_DENSITY);
+    return addPointsToScene(points, surface.color);
+});
+
+// UI checkbox
+function toggleMode() {
+    const checked = toggleModeEl.checked;
+
+    csgSurfacePoints.forEach((m) => scene.remove(m));
+    csgEdgePoints.forEach((m) => scene.remove(m));
+    originalSurfacePoints.forEach((m) => scene.remove(m));
+
+    if (checked) {
+        originalSurfacePoints.forEach((m) => scene.add(m));
+    } else {
+        csgSurfacePoints.forEach((m) => scene.add(m));
+        csgEdgePoints.forEach((m) => scene.add(m));
+    }
+}
+
+const toggleModeEl = document.getElementById("toggleMode")
+toggleModeEl.addEventListener("change", toggleMode);
+toggleMode(false);
