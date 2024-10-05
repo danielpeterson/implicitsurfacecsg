@@ -1,16 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <title>CSG for implicit surfaces</title>
-  <style>
-    body { margin: 0; }
-    canvas { display: block; }
-    .absolute { position: absolute; }
-  </style>
+    <meta charset="UTF-8">
+    <title>CSG for implicit surfaces</title>
+    <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
-  <script type="module" src="./app.js" defer></script>
-  <div class="absolute"><input id="toggleMode" type="checkbox"><label for="toggleMode">Show surfaces/CSG model</label></div>
+    <script type="module" src="./app.js" defer></script>
+    <div class="absolute controls">
+        <div class="radio-buttons-wrapper">
+            <input type="radio" class="radio-button" name="mode" value="1" id="modelButton" checked />
+            <label for="modelButton">CSG Model</label>
+            <input type="radio" class="radio-button" name="mode" value="2" id="surfaceButton" />
+            <label for="surfaceButton">Surfaces</label>
+            <input type="radio" class="radio-button" name="mode" value="3" id="cloudButton" />
+            <label for="cloudButton">Point cloud</label>
+        </div>
+    </div>
+    <div id="loading" class="loading absolute">GENERATING MODEL...</div>
 </body>
+
 </html>
