@@ -2,78 +2,36 @@
 import * as THREE from './external/three.module.min.js';
 import { OrbitControls } from './external/OrbitControls.js';
 
-//-----------------------------------------------------------------------------
-// Three.js
-//-----------------------------------------------------------------------------
-
-const scene = new THREE.Scene();
-
-// Scene setup
-scene.background = new THREE.Color(0xffffff);
-
-// Camera setup
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
-camera.position.set(0, 0, 30);
-camera.lookAt(scene.position);
-
-// Renderer setup
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
-
-// Add controls
-const controls = new OrbitControls(camera, renderer.domElement);
-
-// Render loop
-function animate() {
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-}
-
-animate();
-
-// Handle window resize
-window.addEventListener('resize', onWindowResize, false);
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-
-//-----------------------------------------------------------------------------
-// Visualization
-//-----------------------------------------------------------------------------
-
-function addPointsToScene(modelPoints, color) {
-    if (modelPoints.length == 0) {
-        return
-    }
-
-    const geometry = new THREE.BufferGeometry().setFromPoints(modelPoints);
-    const material = new THREE.PointsMaterial({ color: color, size: 0.4});
-    const points = new THREE.Points(geometry, material);
-    return points;
-}
-
 
 //-----------------------------------------------------------------------------
 // Constants
 //-----------------------------------------------------------------------------
 
+// Define operation types
+const OperationType = {
+    UNION: 'union',
+    SUBTRACT: 'subtract',
+    INTERSECT: 'intersect',
+};
+
+// Point cloud
+const POINT_CLOUD_DENSITY = 20; // Adjust this value to control the number of points
+const POINT_CLOUD_SIZE_X = 20; // From -1 to +1 in X, Y and Z
+const POINT_CLOUD_SIZE_Y = 20; // From -1 to +1 in X, Y and Z
+const POINT_CLOUD_SIZE_Z = 40; // From -1 to +1 in X, Y and Z
+const POINT_CLOUD_MAX_PROJECTION_DISTANCE = 0.3; // Maximum distance for point projection
+
 // Max deviation from exact position that counts as valid
 const EPSILON = 0.001;
-
-// How many points will be generated for different types of features
-const CSG_SURFACE_DENSITY = 10;
-const LINE_DENSITY = 1;
-const PRIMITIVE_SURFACE_DENSITY = 5;
 
 // Defines a points position relative to a surface
 const OUTSIDE_SURFACE = 0;
 const ON_SURFACE = 1;
 const INSIDE_SURFACE = 2;
+
+// Edge finding loop control
+const EDGE_SEARCH_MAX_ITERATIONS = 100;
+const EDGE_SEARCH_EPSILON = EPSILON * 0.1;
 
 
 //-----------------------------------------------------------------------------
@@ -85,54 +43,35 @@ class Surface {
         this.position = position;
         this.quaternionRotation = new THREE.Quaternion().setFromEuler(orientation);
         this.matrix = new THREE.Matrix4().compose(position, this.quaternionRotation, new THREE.Vector3(1, 1, 1));
+        this.invMatrix = this.matrix.clone().invert();
     }
 
     // Methods to be implemented by subclasses
-    generatePoint() { }
     normalAt(point) { }
-    closestPointTo(point) { }
-    area() { }
+    projectPoint(point) { }
+    toLocal(world) { return world.clone().applyMatrix4(this.invMatrix); }
+    toWorld(local) { return local.clone().applyMatrix4(this.matrix); }
+    rotateToWorld(normal) { return normal.clone().applyQuaternion(this.quaternionRotation); }
 }
 
 class PlaneSurface extends Surface {
-    constructor(width, height, color, position, orientation) {
+    constructor(color, position, orientation) {
         super(color, position, orientation);
-        this.width = width;
-        this.height = height;
+        this.normal = new THREE.Vector3(0, 0, 1);
     }
 
-    generatePoint() { return new THREE.Vector3(Math.random() * this.width - this.width / 2, Math.random() * this.height - this.height / 2, 0); }
-    normalAt() { return new THREE.Vector3(0, 0, 1); }
-    closestPointTo(point) { return new THREE.Vector3(point.x, point.y, 0); }
-    area() { return this.width * this.height; }
+    normalAt() { return this.rotateToWorld(this.normal); }
+    projectPoint(point) { return this.toWorld(this.toLocal(point).setZ(0)); }
 }
 
 class CylinderSurface extends Surface {
-    constructor(radius, height, color, position, orientation) {
+    constructor(radius, color, position, orientation) {
         super(color, position, orientation);
         this.radius = radius;
-        this.height = height;
     }
 
-    generatePoint() {
-        const angle = Math.random() * 2 * Math.PI;
-        const x = this.radius * Math.cos(angle);
-        const y = this.radius * Math.sin(angle);
-        const z = Math.random() * this.height - this.height / 2;
-        return new THREE.Vector3(x, y, z);
-    }
-
-    normalAt(point) { return new THREE.Vector3(point.x, point.y, 0).normalize(); }
-
-    closestPointTo(point) {
-        const dir = new THREE.Vector3(point.x, point.y, 0).normalize();
-        const x = this.radius * dir.x;
-        const y = this.radius * dir.y;
-        const z = THREE.MathUtils.clamp(point.z, -this.height / 2, this.height / 2);
-        return new THREE.Vector3(x, y, z);
-    }
-
-    area() { return 2 * Math.PI * this.radius * this.height; }
+    normalAt(point) { return this.rotateToWorld(this.toLocal(point).setZ(0).normalize()); }
+    projectPoint(point) { return this.toWorld(this.toLocal(point).setZ(0).normalize().multiplyScalar(this.radius).setZ(this.toLocal(point).z)); }
 }
 
 class SphereSurface extends Surface {
@@ -141,17 +80,8 @@ class SphereSurface extends Surface {
         this.radius = radius;
     }
 
-    generatePoint() {
-        let p = new THREE.Vector3();
-        do {
-            p.set(Math.random(), Math.random(), Math.random()).multiplyScalar(2).addScalar(-1);
-        } while (p.length() > 1);
-        return p.normalize().multiplyScalar(this.radius);
-    }
-
-    normalAt(point) { return point.clone().normalize(); }
-    closestPointTo(point) { return point.clone().setLength(this.radius); }
-    area() { return 4 * Math.PI * this.radius ** 2; }
+    normalAt(point) { return this.rotateToWorld(this.toLocal(point).normalize()); }
+    projectPoint(point) { return this.toWorld(this.toLocal(point).setLength(this.radius)); }
 }
 
 
@@ -159,54 +89,62 @@ class SphereSurface extends Surface {
 // Surface point/edge generation
 //-----------------------------------------------------------------------------
 
-// This function generates a set of random points in world space that all lie on the given surface
-function generateSurfacePoints(surface, density) {
-    const count = Math.floor(surface.area() * density);
-    const points = [];
-    for (let i = 0; i < count; i++) {
-        points.push(surface.generatePoint().applyMatrix4(surface.matrix));
-    }
+function generatePointCloud(density) {
+    const pointCount = Math.floor(POINT_CLOUD_SIZE_X * POINT_CLOUD_SIZE_Y * POINT_CLOUD_SIZE_Z * density);
 
-    return points
+    return Array.from(new Array(pointCount), () => new THREE.Vector3(
+        THREE.MathUtils.randFloat(-POINT_CLOUD_SIZE_X / 2, POINT_CLOUD_SIZE_X / 2),
+        THREE.MathUtils.randFloat(-POINT_CLOUD_SIZE_Y / 2, POINT_CLOUD_SIZE_Y / 2),
+        THREE.MathUtils.randFloat(-POINT_CLOUD_SIZE_Z / 2, POINT_CLOUD_SIZE_Z / 2)
+    ));
 }
 
-// This function generates random points on the edge(s) between a pair of surfaces
-function generateSurfaceEdges(surface1, surface2) {
-    const MAX_ITERATIONS = 100;
-    const IMPROVEMENT_THRESHOLD = 0.01;
-    const edgeEpsilon = EPSILON * 0.1;
-    const edgePoints = [];
+function findEdgePoint(point, surface1, surface2) {
+    const closestPoint = point.clone();
+    for (let i = 0; i < EDGE_SEARCH_MAX_ITERATIONS; i++) {
+        const p1 = surface1.projectPoint(closestPoint);
+        const p2 = surface2.projectPoint(closestPoint);
+        closestPoint.lerpVectors(p1, p2, 0.5);
 
-    const surface1InvMatrix = surface1.matrix.clone().invert();
-    const surface2InvMatrix = surface2.matrix.clone().invert();
-
-    const points = generateSurfacePoints(surface1, LINE_DENSITY);
-
-    for (const point of points) {
-        let currentPoint = point.clone();
-        let prevDistance = Infinity;
-
-        for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-            const closestPoint1 = surface1.closestPointTo(currentPoint.clone().applyMatrix4(surface1InvMatrix)).applyMatrix4(surface1.matrix);
-            const closestPoint2 = surface2.closestPointTo(currentPoint.clone().applyMatrix4(surface2InvMatrix)).applyMatrix4(surface2.matrix);
-            currentPoint.lerp(closestPoint1, 0.5).lerp(closestPoint2, 0.5);
-
-            const distance = closestPoint1.distanceTo(closestPoint2);
-
-            if (distance < edgeEpsilon) {
-                edgePoints.push(currentPoint);
-                break;
-            }
-
-            if (((prevDistance - distance) / prevDistance) < IMPROVEMENT_THRESHOLD) {
-                break;
-            }
-
-            prevDistance = distance;
+        if (p1.distanceTo(p2) < EDGE_SEARCH_EPSILON) {
+            return closestPoint;
         }
     }
 
-    return edgePoints;
+    return null;
+}
+
+function projectPoints(points, surfaces) {
+    const surfacePoints = surfaces.map(() => []);
+    const edgePoints = surfaces.map(() => []);
+
+    points.forEach(point => {
+        surfaces.forEach((surface, index) => {
+            const projectedPoint = surface.projectPoint(point);
+
+            if (point.distanceTo(projectedPoint) <= POINT_CLOUD_MAX_PROJECTION_DISTANCE) {
+                surfacePoints[index].push(projectedPoint);
+
+                // Check for edge points
+                surfaces.forEach((otherSurface, otherIndex) => {
+                    if (index !== otherIndex) {
+                        const otherProjectedPoint = otherSurface.projectPoint(point);
+
+                        // We allow slightly more points on the opposing surface to get more solid edge lines
+                        if (point.distanceTo(otherProjectedPoint) <= POINT_CLOUD_MAX_PROJECTION_DISTANCE * 5) {
+                            const edgePoint = findEdgePoint(point, surface, otherSurface);
+
+                            if (edgePoint) {
+                                edgePoints[index].push(edgePoint);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    });
+
+    return { surfacePoints, edgePoints };
 }
 
 
@@ -215,15 +153,8 @@ function generateSurfaceEdges(surface1, surface2) {
 //-----------------------------------------------------------------------------
 
 function isPointInsideSurface(point, surface) {
-    // Inverse transform the point to the local coordinates of the surface
-    const inverseMatrix = surface.matrix.clone().invert();
-    const localPoint = point.clone().applyMatrix4(inverseMatrix);
-
-    // Compute the closest point on the surface in local coordinates
-    const closestPoint = surface.closestPointTo(localPoint);
-    const normal = surface.normalAt(closestPoint);
-    const vectorToPoint = new THREE.Vector3().subVectors(closestPoint, localPoint);
-    const dot = vectorToPoint.dot(normal);
+    const closestPoint = surface.projectPoint(point);
+    const dot = closestPoint.clone().sub(point).dot(surface.normalAt(closestPoint));
 
     // Point is inside if dot product is positive
     if (dot > EPSILON) {
@@ -316,8 +247,8 @@ const planes = [
     { position: new THREE.Vector3(-cubeSize / 2, 0, 0), orientation: new THREE.Euler(0, -Math.PI / 2, 0) }, // Left
 ];
 
-const cubeSurfaces = planes.map((p) => new PlaneSurface(cubeSize, cubeSize, 0xff0000, p.position.add(cubePosition), p.orientation));
-const cylinderSurfaces = [new CylinderSurface(modelSize / 2, modelSize * 3, 0x00ff00, cubePosition.clone(), new THREE.Vector3(0, 0, -modelSize / 3))];
+const cubeSurfaces = planes.map((p) => new PlaneSurface(0xff0000, p.position.add(cubePosition), p.orientation));
+const cylinderSurfaces = [new CylinderSurface(modelSize / 2, 0x00ff00, cubePosition.clone())];
 const sphereSurfaces = [new SphereSurface(modelSize, 0x0000ff)];
 
 
@@ -327,12 +258,8 @@ const sphereSurfaces = [new SphereSurface(modelSize, 0x0000ff)];
 
 const allSurfaces = [...cylinderSurfaces, ...cubeSurfaces, ...sphereSurfaces];
 
-// Define operation types
-const OperationType = {
-    UNION: 'union',
-    SUBTRACT: 'subtract',
-    INTERSECT: 'intersect',
-};
+const pointCloud = generatePointCloud(POINT_CLOUD_DENSITY);
+const { surfacePoints, edgePoints } = projectPoints(pointCloud, allSurfaces);
 
 const model = {
     operation: OperationType.SUBTRACT,
@@ -344,30 +271,58 @@ const model = {
     }
 };
 
+function createThreeJSPoints(modelPoints, color) {
+    const geometry = new THREE.BufferGeometry().setFromPoints(modelPoints);
+    const material = new THREE.PointsMaterial({ color: color, size: 0.4 });
+    const points = new THREE.Points(geometry, material);
+    return points;
+}
+
 // CSG surfaces
-const csgSurfacePoints = allSurfaces.map((surface) => {
-    const points = generateSurfacePoints(surface, CSG_SURFACE_DENSITY).filter((point) => isPointInsideNode(point, surface, model) == ON_SURFACE);
-    return addPointsToScene(points, surface.color);
+const csgSurfacePoints = surfacePoints.map((points, index) => {
+    return createThreeJSPoints(points.filter(point => isPointInsideNode(point, allSurfaces[index], model) === ON_SURFACE), allSurfaces[index].color);
 });
 
 // CSG edges
-const csgEdgePoints = [];
-allSurfaces.forEach((surface) => {
-    for (const other of allSurfaces) {
-        if (surface == other) {
-            continue;
-        }
-
-        const points = generateSurfaceEdges(surface, other).filter((point) => isPointInsideNode(point, surface, model) == ON_SURFACE);
-        csgEdgePoints.push(addPointsToScene(points, 0x000000));
-    }
+const csgEdgePoints = edgePoints.map((points, index) => {
+    return createThreeJSPoints(points.filter(point => isPointInsideNode(point, allSurfaces[index], model) === ON_SURFACE), 0x000000);
 });
+
 
 // Original surfaces
-const originalSurfacePoints = allSurfaces.map((surface) => {
-    const points = generateSurfacePoints(surface, PRIMITIVE_SURFACE_DENSITY);
-    return addPointsToScene(points, surface.color);
+const originalSurfacePoints = surfacePoints.map((surfacePoints, index) => {
+    return createThreeJSPoints(surfacePoints, allSurfaces[index].color);
 });
+
+
+//-----------------------------------------------------------------------------
+// UI
+//-----------------------------------------------------------------------------
+
+const scene = new THREE.Scene();
+
+// Scene setup
+scene.background = new THREE.Color(0xffffff);
+
+// Camera setup
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+camera.position.set(0, 0, 30);
+camera.lookAt(scene.position);
+
+// Renderer setup
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Add controls
+const controls = new OrbitControls(camera, renderer.domElement);
+
+// Render loop
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
 
 // UI checkbox
 function toggleMode() {
@@ -388,3 +343,14 @@ function toggleMode() {
 const toggleModeEl = document.getElementById("toggleMode")
 toggleModeEl.addEventListener("change", toggleMode);
 toggleMode(false);
+
+// Handle window resize
+window.addEventListener('resize', onWindowResize, false);
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// Start animation
+requestAnimationFrame(animate);
