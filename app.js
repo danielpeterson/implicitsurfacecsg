@@ -29,7 +29,6 @@ const INSIDE_SURFACE = 2;
 
 // Edge finding loop control
 const EDGE_SEARCH_MAX_ITERATIONS = 100;
-const EDGE_SEARCH_EPSILON = EPSILON * 0.1;
 
 
 //-----------------------------------------------------------------------------
@@ -131,15 +130,15 @@ function generatePointCloud(density) {
 // Find the correspoinding edge point to any point and surface pair by 
 // iteratively refining the point position towards the edge
 function findEdgePoint(point, surface1, surface2) {
-    const closestPoint = point.clone();
     for (let i = 0; i < EDGE_SEARCH_MAX_ITERATIONS; i++) {
-        const p1 = surface1.projectPoint(closestPoint);
-        const p2 = surface2.projectPoint(closestPoint);
-        closestPoint.lerpVectors(p1, p2, 0.5);
+        const p2 = surface1.projectPoint(point);
+        const p1 = surface2.projectPoint(p2);
 
-        if (p1.distanceTo(p2) < EDGE_SEARCH_EPSILON) {
-            return closestPoint;
+        if (p1.distanceTo(p2) < EPSILON) {
+            return p1;
         }
+
+        point = p1;
     }
 
     return null;
