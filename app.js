@@ -26,6 +26,7 @@ const EPSILON = 0.001;
 const OUTSIDE_SURFACE = 0;
 const ON_SURFACE = 1;
 const INSIDE_SURFACE = 2;
+const EXCLUDED = 3;
 
 // Edge finding loop control
 const EDGE_SEARCH_MAX_ITERATIONS = 100;
@@ -152,7 +153,7 @@ function findEdgePoint(point, surface1, surface2) {
 // and add that point to the edge points.
 function projectPoints(points, surfaces) {
     const surfacePoints = surfaces.map(() => []);
-    const edgePoints = surfaces.map(() => []);
+    const edgePoints = [];
 
     points.forEach(point => {
         surfaces.forEach((surface, index) => {
@@ -170,7 +171,7 @@ function projectPoints(points, surfaces) {
                             const edgePoint = findEdgePoint(point, surface, otherSurface);
 
                             if (edgePoint) {
-                                edgePoints[index].push(edgePoint);
+                                edgePoints.push({point: edgePoint, surfaces: [surface, otherSurface]});
                             }
                         }
                     }
@@ -244,39 +245,57 @@ function isLeafNode(node) { return !node.operation }
 function isPointInsideNode(point, pointSurface, node) {
     if (isLeafNode(node)) {
         const shape = node;
-        return isPointInsideShape(point, pointSurface, shape);
+        return [isPointInsideShape(point, pointSurface, shape), shape.includes(pointSurface)];
     }
 
-    const a = isPointInsideNode(point, pointSurface, node.left);
-    const b = isPointInsideNode(point, pointSurface, node.right);
+    const [a, aContainsPoint] = isPointInsideNode(point, pointSurface, node.left);
+    const [b, bContainsPoint] = isPointInsideNode(point, pointSurface, node.right);
+
+    const containsPoint = aContainsPoint || bContainsPoint;
+
+    if (a == EXCLUDED || b == EXCLUDED) {
+        return [EXCLUDED, true];
+    }
 
     // This is the heart of the algorithm and it combines the CSG operations and lets us
     // know if a point in space is part in the model or not.
     switch (node.operation) {
         case OperationType.UNION:
+            if ((a == OUTSIDE_SURFACE && aContainsPoint) || (b == OUTSIDE_SURFACE && bContainsPoint)) {
+                return [EXCLUDED, true];
+            }
             if (a == OUTSIDE_SURFACE && b == OUTSIDE_SURFACE) {
-                return OUTSIDE_SURFACE;
+                return [OUTSIDE_SURFACE, containsPoint];
             }
             if (a == INSIDE_SURFACE || b == INSIDE_SURFACE) {
-                return INSIDE_SURFACE;
+                return [INSIDE_SURFACE, containsPoint];
             }
-            return ON_SURFACE;
+            return [ON_SURFACE, containsPoint];
         case OperationType.SUBTRACT:
             if (a == INSIDE_SURFACE || a == ON_SURFACE) {
                 if (b == OUTSIDE_SURFACE) {
-                    return a;
+                    return [a, containsPoint];
                 } else if (b == ON_SURFACE) {
-                    return ON_SURFACE;
+                    return [ON_SURFACE, containsPoint];
                 }
             }
-            return OUTSIDE_SURFACE;
+            if (containsPoint) {
+                return [EXCLUDED, true];
+            }
+            return [OUTSIDE_SURFACE, false];
         case OperationType.INTERSECT:
             if (a == OUTSIDE_SURFACE || b == OUTSIDE_SURFACE) {
-                return OUTSIDE_SURFACE;
+                if (containsPoint) {
+                    return [EXCLUDED, true];
+                }
+                return [OUTSIDE_SURFACE, false];
             }
-            return (a == ON_SURFACE || b == ON_SURFACE) ? ON_SURFACE : INSIDE_SURFACE;
+            if (a == ON_SURFACE || b == ON_SURFACE) {
+                return [ON_SURFACE, containsPoint]
+            }
+            return [INSIDE_SURFACE, containsPoint];
         default:
-            return OUTSIDE_SURFACE;
+            return [OUTSIDE_SURFACE, containsPoint];
     }
 }
 
@@ -337,15 +356,17 @@ const model = {
 
 // CSG surfaces
 // Evaluate surfaces and keep the points that are part of the final model
-const csgSurfacePoints = surfacePoints.map((points, index) => {
-    return createThreeJSPoints(points.filter(point => isPointInsideNode(point, allSurfaces[index], model) === ON_SURFACE), allSurfaces[index].color);
-});
+const csgSurfacePoints = surfacePoints.map((points, index) =>
+    createThreeJSPoints(points.filter(point => isPointInsideNode(point, allSurfaces[index], model)[0] == ON_SURFACE), allSurfaces[index].color)
+);
 
 // CSG edges
 // Evaluate surfaces and keep the points that are part of the final model
-const csgEdgePoints = edgePoints.map((points, index) => {
-    return createThreeJSPoints(points.filter(point => isPointInsideNode(point, allSurfaces[index], model) === ON_SURFACE), 0x000000);
-});
+const csgEdgePoints = createThreeJSPoints(edgePoints.filter(
+        point => 
+            isPointInsideNode(point.point, point.surfaces[0], model)[0] === ON_SURFACE &&
+            isPointInsideNode(point.point, point.surfaces[1], model)[0] === ON_SURFACE).map(point => point.point), 
+        0x000000);
 
 // Orignal surfaces
 // Create Three.js Points objects for the original un-evaluated surfaces 
@@ -397,7 +418,7 @@ function createThreeJSPoints(modelPoints, color) {
 // UI checkbox
 function hideAllPoints() {
     csgSurfacePoints.forEach((m) => scene.remove(m));
-    csgEdgePoints.forEach((m) => scene.remove(m));
+    scene.remove(csgEdgePoints);
     originalSurfacePoints.forEach((m) => scene.remove(m));
     scene.remove(cloudPoints);
 }
@@ -413,7 +434,7 @@ function showSurfaces() {
 function showModel() { 
     hideAllPoints();
     csgSurfacePoints.forEach((m) => scene.add(m));
-    csgEdgePoints.forEach((m) => scene.add(m));
+    scene.add(csgEdgePoints);
 }
 
 const modelButtonEl = document.getElementById("modelButton");
